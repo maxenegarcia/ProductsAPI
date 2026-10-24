@@ -1,0 +1,334 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Products API - JWT Authentication</title>
+
+    <style>
+        body {
+            font-family: system-ui, sans-serif;
+            max-width: 850px;
+            margin: 30px auto;
+            padding: 0 16px;
+        }
+
+        fieldset {
+            margin: 18px 0;
+            padding: 16px;
+        }
+
+        input {
+            margin: 4px;
+            padding: 8px;
+            max-width: 95%;
+        }
+
+        button {
+            margin: 4px;
+            padding: 8px 12px;
+            cursor: pointer;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 16px;
+        }
+
+        th, td {
+            border: 1px solid #ccc;
+            padding: 8px;
+            text-align: left;
+        }
+
+        .msg {
+            min-height: 24px;
+            white-space: pre-wrap;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>Products API</h1>
+    <p id="session">Not logged in.</p>
+
+    <fieldset>
+        <legend>Register / Login</legend>
+
+        <input id="username" placeholder="Username">
+        <input id="password" type="password"
+               placeholder="Password">
+
+        <button onclick="register()">Register</button>
+        <button onclick="login()">Login</button>
+        <button onclick="logout()">Logout</button>
+
+        <p id="authMsg" class="msg"></p>
+    </fieldset>
+
+    <fieldset>
+        <legend>Public Products</legend>
+        <button onclick="loadProducts()">View Products</button>
+        <p>Anyone can view the product list without logging in.</p>
+    </fieldset>
+
+    <fieldset>
+        <legend>Admin Only</legend>
+
+        <input id="productId" type="number"
+               placeholder="Product ID">
+
+        <p>
+            <input id="name" placeholder="Product name">
+            <input id="description" placeholder="Description">
+        </p>
+
+        <p>
+            <input id="price" type="number" min="0" step="0.01"
+                   placeholder="Price">
+            <input id="stock" type="number" min="0"
+                   placeholder="Stock quantity">
+        </p>
+
+        <button onclick="addProduct()">Add Product</button>
+        <button onclick="updateProduct()">Update Product</button>
+        <button onclick="deleteProduct()">Delete Product</button>
+    </fieldset>
+
+    <p id="msg" class="msg"></p>
+
+    <table>
+        <thead>
+            <tr>
+                <th>ID</th>
+                <th>Name</th>
+                <th>Description</th>
+                <th>Price</th>
+                <th>Stock</th>
+            </tr>
+        </thead>
+        <tbody id="rows"></tbody>
+    </table>
+
+    <script>
+        const BASE = window.location.origin;
+
+        function authMessage(text) {
+            document.getElementById("authMsg").textContent = text;
+        }
+
+        function message(text) {
+            document.getElementById("msg").textContent = text;
+        }
+
+        function credentials() {
+            return {
+                username: document.getElementById("username").value.trim(),
+                password: document.getElementById("password").value
+            };
+        }
+
+        function refreshSession() {
+            const username = localStorage.getItem("username");
+            const role = localStorage.getItem("role");
+
+            document.getElementById("session").textContent =
+                username
+                    ? `Logged in as ${username} (${role})`
+                    : "Not logged in.";
+        }
+
+        async function register() {
+            try {
+                const res = await fetch(BASE + "/api/auth/register", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(credentials())
+                });
+
+                const text = await res.text();
+
+                authMessage(res.ok
+                    ? "Registration successful. Please log in."
+                    : `Registration failed (${res.status}): ${text}`);
+            } catch {
+                authMessage("Cannot connect to the API.");
+            }
+        }
+
+        async function login() {
+            try {
+                const res = await fetch(BASE + "/api/auth/login", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(credentials())
+                });
+
+                if (!res.ok) {
+                    authMessage("Login failed. Check your credentials.");
+                    return;
+                }
+
+                const data = await res.json();
+
+                localStorage.setItem("token", data.token);
+                localStorage.setItem("username", data.username);
+                localStorage.setItem("role", data.role);
+
+                refreshSession();
+                authMessage("Login successful.");
+
+                await loadProducts();
+            } catch {
+                authMessage("Cannot connect to the API.");
+            }
+        }
+
+        function logout() {
+            localStorage.removeItem("token");
+            localStorage.removeItem("username");
+            localStorage.removeItem("role");
+
+            refreshSession();
+            authMessage("Logged out.");
+            message("");
+        }
+
+        async function authFetch(url, options = {}) {
+            const headers = {
+                ...(options.headers || {})
+            };
+
+            const token = localStorage.getItem("token");
+
+            if (token) {
+                headers["Authorization"] = "Bearer " + token;
+            }
+
+            const res = await fetch(url, {
+                ...options,
+                headers
+            });
+
+            if (res.status === 401) {
+                message("401 — Login required or token invalid.");
+            } else if (res.status === 403) {
+                message("403 — You are logged in but lack permission.");
+            }
+
+            return res;
+        }
+
+        function productInput() {
+            return {
+                name: document.getElementById("name").value.trim(),
+                description:
+                    document.getElementById("description").value.trim(),
+                price: Number(document.getElementById("price").value),
+                stockQuantity: Number(
+                    document.getElementById("stock").value)
+            };
+        }
+
+        async function loadProducts() {
+            try {
+                const res = await fetch(BASE + "/api/products");
+
+                if (!res.ok) {
+                    message("Could not load products: " + res.status);
+                    return;
+                }
+
+                const products = await res.json();
+                const rows = document.getElementById("rows");
+
+                rows.replaceChildren();
+
+                for (const p of products) {
+                    const tr = document.createElement("tr");
+
+                    for (const value of [
+                        p.id, p.name, p.description,
+                        p.price, p.stockQuantity
+                    ]) {
+                        const td = document.createElement("td");
+                        td.textContent = value;
+                        tr.appendChild(td);
+                    }
+
+                    rows.appendChild(tr);
+                }
+
+                message("Products loaded.");
+            } catch {
+                message("Cannot connect to the API.");
+            }
+        }
+
+        async function addProduct() {
+            const res = await authFetch(BASE + "/api/products", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(productInput())
+            });
+
+            if (res.ok) {
+                message("Product added successfully (201).");
+                await loadProducts();
+            } else if (res.status !== 401 && res.status !== 403) {
+                message("Add failed: HTTP " + res.status);
+            }
+        }
+
+        async function updateProduct() {
+            const id = document.getElementById("productId").value;
+
+            if (!id) {
+                message("Enter the product ID to update.");
+                return;
+            }
+
+            const res = await authFetch(
+                BASE + "/api/products/" + encodeURIComponent(id), {
+                    method: "PUT",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(productInput())
+                }
+            );
+
+            if (res.ok) {
+                message("Product updated.");
+                await loadProducts();
+            } else if (res.status !== 401 && res.status !== 403) {
+                message("Update failed: HTTP " + res.status);
+            }
+        }
+
+        async function deleteProduct() {
+            const id = document.getElementById("productId").value;
+
+            if (!id) {
+                message("Enter the product ID to delete.");
+                return;
+            }
+
+            const res = await authFetch(
+                BASE + "/api/products/" + encodeURIComponent(id), {
+                    method: "DELETE"
+                }
+            );
+
+            if (res.status === 204) {
+                message("Product deleted successfully (204).");
+                await loadProducts();
+            } else if (res.status !== 401 && res.status !== 403) {
+                message("Delete failed: HTTP " + res.status);
+            }
+        }
+
+        refreshSession();
+        loadProducts();
+    </script>
+</body>
+</html>
